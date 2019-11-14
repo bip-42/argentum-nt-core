@@ -1,9 +1,8 @@
 #!/bin/bash
 
-# this testing script requires jq
-
 cleanup () {
-    rm -rf /path/to/datadir/regtest
+    agt_cli stop
+    rm -rf "$datadir"
 }
 
 mine_block () {
@@ -12,8 +11,12 @@ mine_block () {
     agt_cli setmocktime "$timestamp"
 }
 
+dummy_mine () {
+    mine_block $other_address > /dev/null 2>&1
+}
+
 agt_cli () {
-    src/argentumnt-cli -regtest -datadir=/path/to/datadir "$@"
+    src/argentumnt-cli -regtest -datadir="$datadir" "$@"
 }
 
 get_status () {
@@ -22,10 +25,10 @@ get_status () {
 
 get_height () {
    agt_cli getblockchaininfo | jq .blocks
-}
+}   
 
 start_server () {
-    src/argentumntd -daemon -regtest -datadir=/path/to/datadir -txindex -blockversion="$1"
+    src/argentumntd -daemon -regtest -datadir="$datadir" -txindex -blockversion="$1"
     sleep 3
 }
 
@@ -40,6 +43,15 @@ assert_string_eql () {
         exit 1
     fi
 }
+
+if ! command -v jq > /dev/null; then
+    echo please install jq
+    exit 1
+fi
+
+trap cleanup EXIT
+
+datadir=$(mktemp -d)
 
 # 0X20000000
 bip9_flag_unset=536870912
@@ -84,7 +96,7 @@ start_server $bip9_flag_unset
 # necessitated by the validation rule that block times must strictly 
 # monotonically increase.
 # We therefore call mine_block once whenever we restart the server.
-mine_block $other_address 
+dummy_mine
 
 end=$((miner_confirmation_window - change_activation_threshold + 1))
 for _ in  $(seq 1 $end); do
@@ -95,7 +107,7 @@ assert_string_eql '"started"' "$(get_status)"
 
 stop_server
 start_server $bip9_flag_set
-mine_block $other_address
+dummy_mine
 
 ##### Mine enough blocks to lock in
 end=$((change_activation_threshold))
@@ -105,7 +117,7 @@ done
 
 stop_server
 start_server $bip9_flag_unset
-mine_block $other_address
+dummy_mine
 
 ##### Mine all but one of the rest of the blocks of activation window
 end=$((miner_confirmation_window - change_activation_threshold - 1))
@@ -130,11 +142,8 @@ mine_block $other_address
 assert_string_eql '"active"' "$(get_status)"
 
 assert_string_eql '575' "$(get_height)"
-mine_block $other_address
+mine_block $other_address  > /dev/null 2>&1
 assert_string_eql '575' "$(get_height)"
 
 mine_block $whitelisted_address
 assert_string_eql '576' "$(get_height)"
-
-stop_server
-cleanup
